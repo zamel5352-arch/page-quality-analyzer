@@ -1,17 +1,21 @@
-exports.handler = async function(event) {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method Not Allowed' };
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
   try {
-    const { url, objection, previousResult } = JSON.parse(event.body);
+    const { url, objection, previousResult, savedInstructions } = req.body;
+
+    const AI_BASE_URL = process.env.AI_BASE_URL || 'https://mseaiapi-production.up.railway.app/v1';
+    const AI_API_KEY = process.env.AI_API_KEY || 'change-secret-key-2026';
+    const AI_MODEL = process.env.AI_MODEL || 'gpt-4o';
     const GROQ_KEY = process.env.GROQ_API_KEY;
 
-    if (!GROQ_KEY) {
-      return { statusCode: 500, body: JSON.stringify({ error: 'GROQ_API_KEY not found in Environment Variables' }) };
+    if (!url || !url.startsWith('http')) {
+      return res.status(400).json({ error: 'Valid URL is required' });
     }
 
-    // Step 1: Fetch page content via Jina Reader
+    // Fetch page content via Jina Reader
     let pageContent = '';
     try {
       const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
@@ -38,10 +42,7 @@ exports.handler = async function(event) {
 
 ### Step 3: Evaluate Based on These 7 Criteria
 
----
-
 **1. Reputation**
-Research the reputation of the website and content creator.
 - Lowest: Known scam, fraud, criminal behavior, extremely negative reviews
 - Low: Mildly negative reputation, some concerning signals
 - Medium: Little reputation info available, or mixed signals
@@ -49,73 +50,56 @@ Research the reputation of the website and content creator.
 - Highest: Very positive reputation, awards, expert recognition, go-to source
 
 **2. Page Content (Purpose & Design)**
-Does the page serve a clear, helpful purpose?
 - Lowest: Harmful purpose, designed to deceive, no real purpose
-- Low: Unclear purpose, misleading design, excessive ads that interfere with MC
+- Low: Unclear purpose, misleading design, excessive ads
 - Medium: Clear purpose but nothing special
-- High: Well-designed, clearly achieves its purpose, good user experience
+- High: Well-designed, clearly achieves its purpose
 - Highest: Exceptional design, perfectly fulfills its purpose
 
-**3. MC Identification (Main Content Identification)**
-Can users easily identify the Main Content vs Ads vs Supplementary Content?
-- Lowest: MC is deliberately hidden or obscured, impossible to distinguish
+**3. MC Identification**
+- Lowest: MC deliberately hidden or obscured
 - Low: Hard to find MC, cluttered with ads/popups
-- Medium: MC is identifiable but not prominently presented
-- High: MC is clearly labeled and easy to find
-- Highest: Exceptionally clear MC presentation, perfect separation from ads/SC
+- Medium: MC identifiable but not prominently presented
+- High: MC clearly labeled and easy to find
+- Highest: Exceptionally clear MC presentation
 
 **4. MC Focus**
-Does the Main Content stay focused on its stated purpose?
-- Lowest: No focus, random content, complete mismatch with title/purpose
-- Low: Mostly off-topic, keyword stuffing, thin content with no focus
-- Medium: Generally on-topic but with some drift or filler
-- High: Well-focused on the topic, content matches purpose
-- Highest: Laser-focused, every element serves the page's purpose
+- Lowest: No focus, random content, mismatch with title
+- Low: Mostly off-topic, keyword stuffing
+- Medium: Generally on-topic but with some drift
+- High: Well-focused on the topic
+- Highest: Laser-focused, every element serves the purpose
 
 **5. Main Content Quality**
-Evaluate based on: Effort, Originality, Talent/Skill, Accuracy (for informational pages)
-- Lowest: No effort, auto-generated, copied/scraped, no added value
-- Low: Low effort, low originality, little added value for visitors
-- Medium: Adequate quality, meets basic standards, nothing outstanding
-- High: High effort, original, demonstrates skill, satisfying for users
-- Highest: Exceptional quality, outstanding originality, best-in-class content
+Evaluate: Effort, Originality, Talent/Skill, Accuracy
+- Lowest: No effort, auto-generated, copied/scraped
+- Low: Low effort, low originality, little added value
+- Medium: Adequate quality, meets basic standards
+- High: High effort, original, demonstrates skill
+- Highest: Exceptional quality, outstanding originality
 
-**6. E-E-A-T (Experience, Expertise, Authoritativeness, Trust)**
-Trust is the MOST IMPORTANT factor. Consider:
-- Experience: Does the creator have first-hand experience with the topic?
-- Expertise: Does the creator have the necessary knowledge/skill?
-- Authoritativeness: Is this a recognized go-to source for this topic?
-- Trust: Is the page accurate, honest, safe, and reliable?
-
-YMYL pages (health, finance, legal, safety) require HIGHER E-E-A-T standards.
-
-- Lowest: Lowest E-E-A-T, dangerous misinformation, completely untrustworthy
-- Low: Lacking E-E-A-T, no credentials, questionable accuracy
+**6. E-E-A-T**
+Trust is the MOST IMPORTANT factor.
+YMYL pages require HIGHER E-E-A-T standards.
+- Lowest: Dangerous misinformation, completely untrustworthy
+- Low: Lacking E-E-A-T, no credentials
 - Medium: Some E-E-A-T signals but not strong
-- High: Clear expertise demonstrated, trustworthy, authoritative in its field
-- Highest: World-class expertise, highest level of trust, definitive authority
+- High: Clear expertise, trustworthy, authoritative
+- Highest: World-class expertise, highest level of trust
 
 **7. Overall Page Quality**
-The holistic assessment based on all factors above. Key rule:
-- ANY Lowest-level issue in harm, deception, or trustworthiness = Lowest overall
-- High/Highest requires ALL major criteria to be at that level
-- Medium is the most common rating for ordinary pages that work fine
+- ANY Lowest-level issue = Lowest overall
+- High/Highest requires ALL major criteria at that level
+- Medium is most common for ordinary pages
 
----
+## RATING SCALE (9-point)
+- Lowest, Lowest+, Low, Low+, Medium, Medium+, High, High+, Highest
+- Use "+" when page falls between two levels
 
-## RATING SCALE DEFINITIONS
-- **Lowest**: Harmful, deceptive, untrustworthy, or completely fails its purpose
-- **Low**: Missing E-E-A-T, low quality MC, mildly negative reputation
-- **Medium**: OK page, nothing special, works fine, most ordinary pages
-- **High**: High quality MC, positive reputation, high E-E-A-T, great UX
-- **Highest**: Exceptional in every way, best example of its type
-
----
-
-Return ONLY a valid JSON object in this exact format with NO additional text, NO markdown, NO explanation:
+Return ONLY valid JSON, NO additional text:
 {
   "criteria": [
-    {"name": "Reputation", "rating": "High", "justification": "Detailed evidence-based justification referencing specific signals found on the page"},
+    {"name": "Reputation", "rating": "High", "justification": "..."},
     {"name": "Page Content", "rating": "High", "justification": "..."},
     {"name": "MC Identification", "rating": "Medium", "justification": "..."},
     {"name": "MC Focus", "rating": "High", "justification": "..."},
@@ -124,52 +108,61 @@ Return ONLY a valid JSON object in this exact format with NO additional text, NO
     {"name": "Overall Page Quality", "rating": "High", "justification": "..."}
   ],
   "overall": "High",
-  "comment": "A comprehensive 2-3 sentence summary of the page quality assessment, referencing the most important factors that determined the rating."
+  "comment": "2-3 sentence summary in English."
 }
 
-Available ratings: Lowest, Lowest+, Low, Low+, Medium, Medium+, High, High+, Highest
-All text must be in English.`;
+Available ratings: Lowest, Lowest+, Low, Low+, Medium, Medium+, High, High+, Highest`;
 
-    let userMsg = `Analyze the quality of this page according to Google Search Quality Rater Guidelines: ${url}\n\nActual page content fetched:\n${pageContent}`;
+    let userMsg = `Analyze the quality of this page: ${url}\n\nPage content:\n${pageContent}`;
+
+    if (savedInstructions) {
+      userMsg += `\n\nPersistent instructions:\n${savedInstructions}`;
+    }
 
     if (objection && previousResult) {
-      userMsg += `\n\nPrevious rating:\n${JSON.stringify(previousResult, null, 2)}\n\nUser objection: ${objection}\n\nRe-analyze taking this objection into account. If the objection provides credible new information (e.g., credentials, purpose of the site), adjust the ratings accordingly.`;
+      userMsg += `\n\nPrevious rating:\n${JSON.stringify(previousResult, null, 2)}\n\nUser objection: ${objection}\n\nRe-analyze taking this into account.`;
     }
 
-    const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GROQ_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        temperature: 0.2,
-        max_tokens: 2000,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userMsg }
-        ]
-      })
-    });
+    const messages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: userMsg }
+    ];
 
-    if (!groqRes.ok) {
-      const err = await groqRes.json().catch(() => ({}));
-      return { statusCode: 500, body: JSON.stringify({ error: err?.error?.message || 'Groq API error' }) };
+    // Try Railway AI first
+    let text = '';
+    try {
+      const aiRes = await fetch(`${AI_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${AI_API_KEY}`,
+          'ngrok-skip-browser-warning': 'true'
+        },
+        body: JSON.stringify({ model: AI_MODEL, temperature: 0.2, max_tokens: 2000, messages })
+      });
+      const aiData = await aiRes.json();
+      text = aiData.choices?.[0]?.message?.content || '';
+    } catch(e) {
+      // Fallback to Groq
+      if (GROQ_KEY) {
+        const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
+          body: JSON.stringify({ model: 'llama-3.3-70b-versatile', temperature: 0.2, max_tokens: 2000, messages })
+        });
+        const groqData = await groqRes.json();
+        text = groqData.choices?.[0]?.message?.content || '';
+      } else {
+        throw new Error('AI service unavailable');
+      }
     }
 
-    const groqData = await groqRes.json();
-    const text = groqData.choices?.[0]?.message?.content || '';
     const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return { statusCode: 500, body: JSON.stringify({ error: 'AI did not return valid JSON' }) };
+    if (!match) return res.status(500).json({ error: 'AI did not return valid JSON' });
 
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify(JSON.parse(match[0]))
-    };
+    return res.status(200).json(JSON.parse(match[0]));
 
   } catch(e) {
-    return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
+    return res.status(500).json({ error: e.message });
   }
-};
+}
