@@ -160,92 +160,110 @@
   </div>
 </div>
 
-<footer>Built with Groq AI | Google Quality Rater Guidelines</footer>
+<footer>Built with AI | Google Quality Rater Guidelines</footer>
 
 <script>
 const RATINGS = ["Lowest","Lowest+","Low","Low+","Medium","Medium+","High","High+","Highest"];
 let cur = null, history = [], revCount = 0;
-let GROQ_KEY = localStorage.getItem('groq_api_key') || '';
 
-// Show saved key if exists
-if (GROQ_KEY) {
-  document.getElementById('apiKeyInput').value = GROQ_KEY;
-  document.getElementById('apiCard').style.borderColor = 'rgba(0,212,170,0.3)';
+const SAVED_INSTRUCTIONS_KEY = 'pq_saved_instructions';
+
+function getSavedInstructions() {
+  return localStorage.getItem(SAVED_INSTRUCTIONS_KEY) || '';
 }
 
-function saveKey() {
-  const k = document.getElementById('apiKeyInput').value.trim();
-  const err = document.getElementById('keyError');
-  if (!k || !k.startsWith('gsk_')) {
-    err.textContent = 'Invalid key — must start with gsk_';
-    err.className = 'error-card active';
-    return;
-  }
-  GROQ_KEY = k;
-  localStorage.setItem('groq_api_key', k);
-  err.className = 'error-card';
-  document.getElementById('apiCard').style.borderColor = 'rgba(0,212,170,0.4)';
-  const btn = event.target;
-  btn.textContent = '✅ Saved';
-  setTimeout(() => btn.textContent = 'Save', 2000);
+function savePersistentInstruction(text) {
+  const clean = text.trim();
+  if (!clean) return;
+
+  const old = getSavedInstructions();
+  const existing = old
+    .split('\n')
+    .map(x => x.replace(/^- /, '').trim())
+    .filter(Boolean);
+
+  if (existing.includes(clean)) return;
+
+  const entry = `- ${clean}`;
+  const updated = old ? `${old}\n${entry}` : entry;
+  localStorage.setItem(SAVED_INSTRUCTIONS_KEY, updated);
+}
+
+function escapeHTML(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function normalizeRating(rating) {
+  if (!rating || typeof rating !== 'string') return 'Medium';
+
+  const cleaned = rating.trim().replace(/\s*\+\s*$/, '+');
+  return RATINGS.includes(cleaned) ? cleaned : 'Medium';
 }
 
 const RC = r => {
+  const rating = normalizeRating(r);
   const map = {
-    "Lowest":"lowest","Lowest+":"lowest",
-    "Low":"low","Low+":"low",
-    "Medium":"medium","Medium+":"medium",
-    "High":"high","High+":"high",
+    "Lowest":"lowest",
+    "Lowest+":"lowest",
+    "Low":"low",
+    "Low+":"low",
+    "Medium":"medium",
+    "Medium+":"medium",
+    "High":"high",
+    "High+":"high",
     "Highest":"highest"
   };
-  return map[r] || "medium";
+  return map[rating] || "medium";
 };
-const RA = r => ({Lowest:"Lowest",Low:"Low",Medium:"Medium",High:"High",Highest:"Highest"}[r]||r);
 
-function scaleBar(o) {
-  const i = RATINGS.indexOf(o); // 0-8
-  // Map 0-8 to 1-5 bars
-  const barsToFill = Math.max(1, Math.round((i / 8) * 5) + (i < 2 ? 1 : 0));
+const RA = r => normalizeRating(r);
+
+function scaleBar(overallRating) {
+  const rating = normalizeRating(overallRating);
+  const i = RATINGS.indexOf(rating);
+  const safeIndex = i >= 0 ? i : 4;
+
+  const barsToFill = Math.max(
+    1,
+    Math.min(5, Math.ceil(((safeIndex + 1) / RATINGS.length) * 5))
+  );
+
   for (let j = 1; j <= 5; j++) {
-    const el = document.getElementById('s'+j);
+    const el = document.getElementById('s' + j);
     el.className = 'si';
-    if (j <= barsToFill) el.classList.add('a-'+RC(o));
+
+    if (j <= barsToFill) {
+      el.classList.add('a-' + RC(rating));
+    }
   }
 }
 
-const SYSTEM_PROMPT = `أنت محلل متخصص في Google Search Quality Rater Guidelines. مهمتك تحليل صفحات الويب وتقييمها.
+async function callAPI(url, objection = null, previousResult = null) {
+  const body = {
+    url,
+    savedInstructions: getSavedInstructions()
+  };
 
-يجب أن تُرجع JSON فقط بهذا الشكل بالضبط بدون أي نص إضافي:
-{
-  "criteria": [
-    {"name": "Reputation", "rating": "High", "justification": "..."},
-    {"name": "Page Content", "rating": "High", "justification": "..."},
-    {"name": "MC Identification", "rating": "Medium", "justification": "..."},
-    {"name": "MC Focus", "rating": "High", "justification": "..."},
-    {"name": "Main Content Quality", "rating": "Medium", "justification": "..."},
-    {"name": "E-E-A-T", "rating": "High", "justification": "..."},
-    {"name": "Overall Page Quality", "rating": "High", "justification": "..."}
-  ],
-  "overall": "High",
-  "comment": "تعليق شامل باللغة العربية عن جودة الصفحة"
-}
-
-Ratingات المتاحة: Lowest, Low, Medium, High, Highest
-الـ justification يكون باللغة العربية دائماً.`;
-
-async function callGroq(url, objection = null, previousResult = null) {
-  const body = { url };
   if (objection) body.objection = objection;
   if (previousResult) body.previousResult = previousResult;
 
   const res = await fetch('/api/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({...body, lang: "en"})
+    body: JSON.stringify(body)
   });
 
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `Error: ${res.status}`);
+
+  if (!res.ok) {
+    throw new Error(data.error || `Error: ${res.status}`);
+  }
+
   return data;
 }
 
@@ -265,16 +283,20 @@ async function analyze() {
   document.getElementById('loadingText').textContent = 'Analyzing page with AI...';
   document.getElementById('loading').className = 'loading active';
   document.getElementById('results').className = 'results';
-  cur = null; history = []; revCount = 0;
+
+  cur = null;
+  history = [];
+  revCount = 0;
+
   document.getElementById('histSection').style.display = 'none';
   document.getElementById('histList').innerHTML = '';
   document.getElementById('revBadge').className = 'rev-badge';
 
   try {
-    const r = await callGroq(url);
+    const r = await callAPI(url);
     cur = r;
     display(url, r, null);
-  } catch(e) {
+  } catch (e) {
     err.textContent = 'Error: ' + e.message;
     err.className = 'error-card active';
   }
@@ -285,7 +307,17 @@ async function analyze() {
 
 async function submitObj() {
   const obj = document.getElementById('objInput').value.trim();
-  if (!obj) { document.getElementById('objInput').focus(); return; }
+
+  if (!obj) {
+    document.getElementById('objInput').focus();
+    return;
+  }
+
+  if (!cur) {
+    alert('Please analyze a page first.');
+    return;
+  }
+
   const url = document.getElementById('analyzedUrl').textContent;
   const prev = JSON.parse(JSON.stringify(cur));
 
@@ -295,14 +327,24 @@ async function submitObj() {
   document.getElementById('loading').className = 'loading active';
 
   try {
-    const r = await callGroq(url, obj, prev);
+    const r = await callAPI(url, obj, prev);
+
+    savePersistentInstruction(obj);
+
     revCount++;
-    history.push({rev:revCount, obj, prevO:prev.overall, newO:r.overall});
+    history.push({
+      rev: revCount,
+      obj,
+      prevO: normalizeRating(prev.overall),
+      newO: normalizeRating(r.overall)
+    });
+
     cur = r;
     display(url, r, prev);
+
     document.getElementById('objInput').value = '';
     updateHist();
-  } catch(e) {
+  } catch (e) {
     alert('Error: ' + e.message);
   }
 
@@ -312,53 +354,101 @@ async function submitObj() {
 
 function display(url, data, prev) {
   document.getElementById('analyzedUrl').textContent = url;
+
   if (revCount > 0) {
     const b = document.getElementById('revBadge');
     b.textContent = 'Review ' + revCount;
     b.className = 'rev-badge active';
   }
 
+  if (!Array.isArray(data.criteria)) {
+    data.criteria = [];
+  }
+
+  data.criteria = data.criteria.map(item => ({
+    ...item,
+    rating: normalizeRating(item.rating)
+  }));
+
+  data.overall = normalizeRating(data.overall);
+
   const tbody = document.getElementById('resultsBody');
   tbody.innerHTML = '';
+
   data.criteria.forEach((item, i) => {
-    const cls = RC(item.rating), ar = RA(item.rating);
-    const changed = prev && prev.criteria[i] && prev.criteria[i].rating !== item.rating;
+    const cls = RC(item.rating);
+    const ar = RA(item.rating);
+
+    const prevRating = prev?.criteria?.[i]?.rating
+      ? normalizeRating(prev.criteria[i].rating)
+      : null;
+
+    const changed = prevRating && prevRating !== item.rating;
+
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td><div class="cname">${item.name}</div></td>
-      <td>${changed?'<span class="chg"></span>':''}<span class="badge ${cls}">${ar}</span>
-      ${changed?`<br><small style="color:var(--muted);font-size:.75rem;margin-top:4px;display:block">Was: ${RA(prev.criteria[i].rating)}</small>`:''}</td>
-      <td><div class="just">${item.justification}</div></td>`;
+
+    tr.innerHTML = `
+      <td><div class="cname">${escapeHTML(item.name)}</div></td>
+      <td>
+        ${changed ? '<span class="chg"></span>' : ''}
+        <span class="badge ${cls}">${escapeHTML(ar)}</span>
+        ${changed ? `<br><small style="color:var(--muted);font-size:.75rem;margin-top:4px;display:block">Was: ${escapeHTML(prevRating)}</small>` : ''}
+      </td>
+      <td><div class="just">${escapeHTML(item.justification)}</div></td>
+    `;
+
     tbody.appendChild(tr);
   });
 
-  const oc = RC(data.overall), oa = RA(data.overall);
-  const oChanged = prev && prev.overall !== data.overall;
-  document.getElementById('overallRating').innerHTML = `<span style="color:var(--${oc})">${oa}</span>${oChanged?`<span style="font-size:.9rem;color:var(--muted);margin-right:12px;">← Was: ${RA(prev.overall)}</span>`:''}`;
+  const oc = RC(data.overall);
+  const oa = RA(data.overall);
+  const prevOverall = prev?.overall ? normalizeRating(prev.overall) : null;
+  const oChanged = prevOverall && prevOverall !== data.overall;
+
+  document.getElementById('overallRating').innerHTML = `
+    <span style="color:var(--${oc})">${escapeHTML(oa)}</span>
+    ${oChanged ? `<span style="font-size:.9rem;color:var(--muted);margin-left:12px;">← Was: ${escapeHTML(prevOverall)}</span>` : ''}
+  `;
+
   scaleBar(data.overall);
-  document.getElementById('commentText').textContent = data.comment;
+
+  document.getElementById('commentText').textContent = data.comment || '';
   document.getElementById('results').className = 'results active';
-  document.getElementById('results').scrollIntoView({behavior:'smooth', block:'start'});
+  document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function updateHist() {
   if (!history.length) return;
+
   document.getElementById('histSection').style.display = 'block';
+
   const list = document.getElementById('histList');
   list.innerHTML = '';
+
   history.forEach(h => {
     const d = document.createElement('div');
     d.className = 'hitem';
+
     const changed = h.prevO !== h.newO;
-    d.innerHTML = `<strong>Review ${h.rev}:</strong> "${h.obj}"<br>
+
+    d.innerHTML = `
+      <strong>Review ${h.rev}:</strong> "${escapeHTML(h.obj)}"<br>
       <span style="margin-top:6px;display:inline-block;">
-      ${changed ? `✅ Changed: <strong>${RA(h.prevO)}</strong> ← <strong style="color:var(--${RC(h.newO)})">${RA(h.newO)}</strong>` 
-               : `ℹ️ Overall rating unchanged: <strong>${RA(h.newO)}</strong>`}
-      </span>`;
+        ${
+          changed
+            ? `✅ Changed: <strong>${escapeHTML(h.prevO)}</strong> → <strong style="color:var(--${RC(h.newO)})">${escapeHTML(h.newO)}</strong>`
+            : `ℹ️ Overall rating unchanged: <strong>${escapeHTML(h.newO)}</strong>`
+        }
+      </span>
+    `;
+
     list.appendChild(d);
   });
 }
 
-document.getElementById('urlInput').addEventListener('keypress', e => { if(e.key==='Enter') analyze(); });
+document.getElementById('urlInput').addEventListener('keypress', e => {
+  if (e.key === 'Enter') analyze();
+});
 </script>
 </body>
 </html>
