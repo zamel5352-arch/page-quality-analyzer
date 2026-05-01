@@ -167,6 +167,32 @@ const RATINGS = ["Lowest","Low","Medium","High","Highest"];
 let cur = null, history = [], revCount = 0;
 let GROQ_KEY = localStorage.getItem('groq_api_key') || '';
 
+const SAVED_INSTRUCTIONS_KEY = 'pq_saved_instructions';
+
+function getSavedInstructions() {
+  return localStorage.getItem(SAVED_INSTRUCTIONS_KEY) || '';
+}
+
+function savePersistentInstruction(text) {
+  const clean = text.trim();
+  if (!clean) return;
+
+  const old = getSavedInstructions();
+
+  // منع تكرار نفس التعليق بالظبط
+  if (old.includes(clean)) return;
+
+  const entry = `- ${clean}`;
+  const updated = old ? `${old}\n${entry}` : entry;
+
+  localStorage.setItem(SAVED_INSTRUCTIONS_KEY, updated);
+}
+
+function clearSavedInstructions() {
+  localStorage.removeItem(SAVED_INSTRUCTIONS_KEY);
+  alert('Saved instructions cleared.');
+}
+
 // Show saved key if exists
 if (GROQ_KEY) {
   document.getElementById('apiKeyInput').value = GROQ_KEY;
@@ -202,35 +228,21 @@ function scaleBar(o) {
   }
 }
 
-const SYSTEM_PROMPT = `أنت محلل متخصص في Google Search Quality Rater Guidelines. مهمتك تحليل صفحات الويب وتقييمها.
-
-يجب أن تُرجع JSON فقط بهذا الشكل بالضبط بدون أي نص إضافي:
-{
-  "criteria": [
-    {"name": "Reputation", "rating": "High", "justification": "..."},
-    {"name": "Page Content", "rating": "High", "justification": "..."},
-    {"name": "MC Identification", "rating": "Medium", "justification": "..."},
-    {"name": "MC Focus", "rating": "High", "justification": "..."},
-    {"name": "Main Content Quality", "rating": "Medium", "justification": "..."},
-    {"name": "E-E-A-T", "rating": "High", "justification": "..."},
-    {"name": "Overall Page Quality", "rating": "High", "justification": "..."}
-  ],
-  "overall": "High",
-  "comment": "تعليق شامل باللغة العربية عن جودة الصفحة"
-}
-
-Ratingات المتاحة: Lowest, Low, Medium, High, Highest
-الـ justification يكون باللغة العربية دائماً.`;
-
 async function callGroq(url, objection = null, previousResult = null) {
-  const body = { url };
+  const savedInstructions = getSavedInstructions();
+
+  const body = {
+    url,
+    savedInstructions
+  };
+
   if (objection) body.objection = objection;
   if (previousResult) body.previousResult = previousResult;
 
   const res = await fetch('/.netlify/functions/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({...body, lang: "en"})
+    body: JSON.stringify({ ...body, lang: "en" })
   });
 
   const data = await res.json();
@@ -274,7 +286,11 @@ async function analyze() {
 
 async function submitObj() {
   const obj = document.getElementById('objInput').value.trim();
-  if (!obj) { document.getElementById('objInput').focus(); return; }
+  if (!obj) {
+    document.getElementById('objInput').focus();
+    return;
+  }
+
   const url = document.getElementById('analyzedUrl').textContent;
   const prev = JSON.parse(JSON.stringify(cur));
 
@@ -285,6 +301,10 @@ async function submitObj() {
 
   try {
     const r = await callGroq(url, obj, prev);
+
+    // حفظ التعليق تلقائيًا بعد نجاح إعادة التحليل
+    savePersistentInstruction(obj);
+
     revCount++;
     history.push({rev:revCount, obj, prevO:prev.overall, newO:r.overall});
     cur = r;
@@ -301,6 +321,7 @@ async function submitObj() {
 
 function display(url, data, prev) {
   document.getElementById('analyzedUrl').textContent = url;
+
   if (revCount > 0) {
     const b = document.getElementById('revBadge');
     b.textContent = 'Review ' + revCount;
@@ -309,20 +330,26 @@ function display(url, data, prev) {
 
   const tbody = document.getElementById('resultsBody');
   tbody.innerHTML = '';
+
   data.criteria.forEach((item, i) => {
     const cls = RC(item.rating), ar = RA(item.rating);
     const changed = prev && prev.criteria[i] && prev.criteria[i].rating !== item.rating;
     const tr = document.createElement('tr');
+
     tr.innerHTML = `<td><div class="cname">${item.name}</div></td>
       <td>${changed?'<span class="chg"></span>':''}<span class="badge ${cls}">${ar}</span>
       ${changed?`<br><small style="color:var(--muted);font-size:.75rem;margin-top:4px;display:block">Was: ${RA(prev.criteria[i].rating)}</small>`:''}</td>
       <td><div class="just">${item.justification}</div></td>`;
+
     tbody.appendChild(tr);
   });
 
   const oc = RC(data.overall), oa = RA(data.overall);
   const oChanged = prev && prev.overall !== data.overall;
-  document.getElementById('overallRating').innerHTML = `<span style="color:var(--${oc})">${oa}</span>${oChanged?`<span style="font-size:.9rem;color:var(--muted);margin-right:12px;">← Was: ${RA(prev.overall)}</span>`:''}`;
+
+  document.getElementById('overallRating').innerHTML =
+    `<span style="color:var(--${oc})">${oa}</span>${oChanged?`<span style="font-size:.9rem;color:var(--muted);margin-right:12px;">← Was: ${RA(prev.overall)}</span>`:''}`;
+
   scaleBar(data.overall);
   document.getElementById('commentText').textContent = data.comment;
   document.getElementById('results').className = 'results active';
@@ -331,23 +358,29 @@ function display(url, data, prev) {
 
 function updateHist() {
   if (!history.length) return;
+
   document.getElementById('histSection').style.display = 'block';
   const list = document.getElementById('histList');
   list.innerHTML = '';
+
   history.forEach(h => {
     const d = document.createElement('div');
     d.className = 'hitem';
     const changed = h.prevO !== h.newO;
+
     d.innerHTML = `<strong>Review ${h.rev}:</strong> "${h.obj}"<br>
       <span style="margin-top:6px;display:inline-block;">
       ${changed ? `✅ ✅ Changed: <strong>${RA(h.prevO)}</strong> ← <strong style="color:var(--${RC(h.newO)})">${RA(h.newO)}</strong>` 
                : `ℹ️ لم يتغير Rating الكلي: <strong>${RA(h.newO)}</strong>`}
       </span>`;
+
     list.appendChild(d);
   });
 }
 
-document.getElementById('urlInput').addEventListener('keypress', e => { if(e.key==='Enter') analyze(); });
+document.getElementById('urlInput').addEventListener('keypress', e => {
+  if(e.key === 'Enter') analyze();
+});
 </script>
 </body>
 </html>
