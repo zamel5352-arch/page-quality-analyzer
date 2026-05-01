@@ -135,36 +135,70 @@ Available ratings: Lowest, Lowest+, Low, Low+, Medium, Medium+, High, High+, Hig
       { role: 'user', content: userMsg }
     ];
 
-    // Try Railway AI first
-    let text = '';
-    try {
-      const aiRes = await fetch(`${AI_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${AI_API_KEY}`,
-          'ngrok-skip-browser-warning': 'true'
-        },
-        body: JSON.stringify({ model: AI_MODEL, temperature: 0.2, max_tokens: 2000, messages })
-      });
-      const aiData = await aiRes.json();
-      text = aiData.choices?.[0]?.message?.content || '';
-    } catch(e) {
-      // Fallback to Groq
-      if (GROQ_KEY) {
-        const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-          body: JSON.stringify({ model: 'llama-3.3-70b-versatile', temperature: 0.2, max_tokens: 2000, messages })
-        });
-        const groqData = await groqRes.json();
-        text = groqData.choices?.[0]?.message?.content || '';
-      } else {
-        throw new Error('AI service unavailable');
-      }
-    }
+// Try Railway AI first, then Groq fallback
+let text = '';
 
-    const match = text.match(/\{[\s\S]*\}/);
+try {
+  const aiRes = await fetch(`${AI_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${AI_API_KEY}`,
+      'ngrok-skip-browser-warning': 'true'
+    },
+    body: JSON.stringify({
+      model: AI_MODEL,
+      temperature: 0.2,
+      max_tokens: 2000,
+      response_format: { type: 'json_object' },
+      messages
+    })
+  });
+
+  if (!aiRes.ok) {
+    const errText = await aiRes.text().catch(() => '');
+    throw new Error(`Railway AI error ${aiRes.status}: ${errText}`);
+  }
+
+  const aiData = await aiRes.json();
+  text = aiData.choices?.[0]?.message?.content || '';
+
+  if (!text) {
+    throw new Error('Railway AI returned empty response');
+  }
+
+} catch (railwayError) {
+  if (!GROQ_KEY) {
+    throw new Error(`Railway failed and GROQ_API_KEY is missing. Railway error: ${railwayError.message}`);
+  }
+
+  const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${GROQ_KEY}`
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      temperature: 0.2,
+      max_tokens: 2000,
+      response_format: { type: 'json_object' },
+      messages
+    })
+  });
+
+  if (!groqRes.ok) {
+    const err = await groqRes.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `Groq API error ${groqRes.status}`);
+  }
+
+  const groqData = await groqRes.json();
+  text = groqData.choices?.[0]?.message?.content || '';
+
+  if (!text) {
+    throw new Error('Groq returned empty response');
+  }
+}
     if (!match) return res.status(500).json({ error: 'AI did not return valid JSON' });
 
     return res.status(200).json(JSON.parse(match[0]));
